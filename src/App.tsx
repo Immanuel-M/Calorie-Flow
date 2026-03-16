@@ -33,6 +33,20 @@ export default function App() {
   const [newCalories, setNewCalories] = useState('');
   const [showGoalEdit, setShowGoalEdit] = useState(false);
   const [isAiEstimating, setIsAiEstimating] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [alertSent, setAlertSent] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Debounced AI estimation
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (newName.trim() && !newCalories && isAdding) {
+        estimateCalories();
+      }
+    }, 1000); // 1 second delay after typing stops
+
+    return () => clearTimeout(timer);
+  }, [newName, isAdding]);
 
   // Load data from localStorage
   useEffect(() => {
@@ -51,21 +65,57 @@ export default function App() {
       const parsedWater = JSON.parse(savedWater);
       if (parsedWater.date === today) setWater(parsedWater.amount);
     }
+    
+    const savedPhone = localStorage.getItem('calorie_phone');
+    if (savedPhone) setPhoneNumber(savedPhone);
+    
+    const lastAlertDate = localStorage.getItem('calorie_last_alert');
+    if (lastAlertDate === today.toString()) setAlertSent(true);
   }, []);
 
   // Save data to localStorage
   useEffect(() => {
     localStorage.setItem('calorie_items', JSON.stringify(items));
     localStorage.setItem('calorie_goal', goal.toString());
+    localStorage.setItem('calorie_phone', phoneNumber);
     localStorage.setItem('calorie_water', JSON.stringify({
       date: new Date().setHours(0, 0, 0, 0),
       amount: water
     }));
-  }, [items, goal, water]);
+  }, [items, goal, water, phoneNumber]);
 
   const totalCalories = useMemo(() => 
     items.reduce((sum, item) => sum + item.calories, 0)
   , [items]);
+
+  // Alert Logic
+  useEffect(() => {
+    const today = new Date().setHours(0, 0, 0, 0).toString();
+    if (totalCalories >= 600 && !alertSent && phoneNumber) {
+      const sendAlert = async () => {
+        try {
+          const response = await fetch('/api/send-alert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phoneNumber, calories: totalCalories }),
+          });
+          if (response.ok) {
+            setAlertSent(true);
+            localStorage.setItem('calorie_last_alert', today);
+          }
+        } catch (error) {
+          console.error("Failed to send SMS alert:", error);
+        }
+      };
+      sendAlert();
+    }
+    
+    // Reset alert if calories drop below 600 (though unlikely in a day log)
+    if (totalCalories < 600 && alertSent) {
+      setAlertSent(false);
+      localStorage.removeItem('calorie_last_alert');
+    }
+  }, [totalCalories, alertSent, phoneNumber]);
 
   const remaining = Math.max(0, goal - totalCalories);
 
@@ -197,13 +247,21 @@ Return ONLY the JSON array.`,
             </div>
           </div>
         </div>
-        <button 
-          onClick={() => setShowGoalEdit(true)}
-          className="flex items-center gap-2 glass-panel hover:bg-white/5 px-4 py-2 rounded-full transition-all group"
-        >
-          <Target size={14} className="text-emerald-500 group-hover:rotate-90 transition-transform" />
-          <span className="text-xs font-mono tracking-wider">{goal} KCAL</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="w-10 h-10 glass-panel hover:bg-white/5 rounded-xl flex items-center justify-center transition-all"
+          >
+            <Sparkles size={16} className={cn(phoneNumber ? "text-emerald-500" : "text-zinc-600")} />
+          </button>
+          <button 
+            onClick={() => setShowGoalEdit(true)}
+            className="flex items-center gap-2 glass-panel hover:bg-white/5 px-4 py-2 rounded-full transition-all group"
+          >
+            <Target size={14} className="text-emerald-500 group-hover:rotate-90 transition-transform" />
+            <span className="text-xs font-mono tracking-wider">{goal} KCAL</span>
+          </button>
+        </div>
       </header>
 
       <main className="relative z-10 max-w-md mx-auto p-6 space-y-10">
@@ -569,6 +627,49 @@ Return ONLY the JSON array.`,
                   className="w-full bg-white text-black font-black p-5 rounded-2xl hover:bg-zinc-200 transition-all uppercase tracking-widest text-xs"
                 >
                   Update Core
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Settings / Alert Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSettings(false)}
+              className="absolute inset-0 bg-black/90 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-xs glass-panel rounded-[40px] p-10 shadow-2xl border-white/10"
+            >
+              <h2 className="text-xl font-bold mb-2 text-center tracking-tighter">SMS ALERTS</h2>
+              <p className="text-[10px] font-mono text-zinc-500 text-center tracking-widest uppercase mb-8">Biometric Notifications</p>
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Phone Number</label>
+                  <input 
+                    type="tel"
+                    placeholder="+1234567890"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-center font-mono text-emerald-500 focus:outline-none focus:border-emerald-500/50"
+                  />
+                  <p className="text-[8px] text-zinc-600 text-center uppercase tracking-wider">Alert triggers at 600 KCAL</p>
+                </div>
+                <button 
+                  onClick={() => setShowSettings(false)}
+                  className="w-full bg-emerald-500 text-black font-black p-5 rounded-2xl hover:bg-emerald-400 transition-all uppercase tracking-widest text-xs"
+                >
+                  Save Sync
                 </button>
               </div>
             </motion.div>
